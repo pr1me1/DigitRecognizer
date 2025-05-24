@@ -10,6 +10,7 @@ import joblib
 import tensorflow.keras as keras
 from tensorflow.keras import layers
 import tensorflow as tf
+import traceback
 
 
 class Patches(layers.Layer):
@@ -70,6 +71,7 @@ class DigitRecognitionApp:
 		self.model_type = None
 		self.expected_features = None
 		self.h5_input_shape = None
+		self.invert_image = tk.BooleanVar(value=False)
 
 		self.model_names = [
 			'KNeighbors_EMNIST_digits', 'LogisticRegression_EMNIST_digits',
@@ -80,8 +82,25 @@ class DigitRecognitionApp:
 			'LogisticRegression_MNIST_model', 'GaussianNB_MNIST_model',
 			'DecisionTree_MNIST_model'
 		]
-		self.model_paths = {name: f"{name}.pkl" if name.endswith(
-			'_model') or 'EMNIST' in name else f"{name}.h5" for name in self.model_names}
+
+		self.model_paths = {
+			'KNeighbors_EMNIST_digits': 'KNeighbors_EMNIST_digits.pkl',
+			'LogisticRegression_EMNIST_digits': 'LogisticRegression_EMNIST_digits.pkl',
+			'GaussianNB_EMNIST_digits': 'GaussianNB_EMNIST_digits.pkl',
+			'DecisionTree_EMNIST_digits': 'DecisionTree_EMNIST_digits.pkl',
+			'DNN_EMNIST_digits': 'DNN_EMNIST_digits.h5',
+			'SVM_model': 'SVM_model.pkl',
+			'LogisticRegression_model': 'LogisticRegression_model.pkl',
+			'KNeighbors_model': 'KNeighbors_model.pkl',
+			'GaussianNB_model': 'GaussianNB_model.pkl',
+			'DecisionTree_model': 'DecisionTree_model.pkl',
+			'vit_mnist_model': 'vit_mnist_model.h5',
+			'KNeighbors_MNIST_model': 'KNeighbors_MNIST_model.pkl',
+			'dnn_mnist_model': 'dnn_mnist_model.h5',
+			'LogisticRegression_MNIST_model': 'LogisticRegression_MNIST_model.pkl',
+			'GaussianNB_MNIST_model': 'GaussianNB_MNIST_model.pkl',
+			'DecisionTree_MNIST_model': 'DecisionTree_MNIST_model.pkl'
+		}
 
 		self.label_title = tk.Label(root, text="Handwritten Digit Recognition", font=("Arial", 16))
 		self.label_title.pack(pady=10)
@@ -96,6 +115,10 @@ class DigitRecognitionApp:
 		self.model_dropdown = ttk.Combobox(root, textvariable=self.model_var, values=self.model_names, state="readonly")
 		self.model_dropdown.bind("<<ComboboxSelected>>", self.load_selected_model)
 		self.model_dropdown.pack(pady=5)
+
+		self.invert_checkbox = tk.Checkbutton(root, text="Invert Image (for dark digits on white background)",
+											  variable=self.invert_image)
+		self.invert_checkbox.pack(pady=5)
 
 		self.btn_predict = tk.Button(root, text="Predict Digit", command=self.predict_digit, state="disabled")
 		self.btn_predict.pack(pady=5)
@@ -137,6 +160,10 @@ class DigitRecognitionApp:
 			messagebox.showerror("Error", f"Model path for {selected_model} not found!")
 			return
 
+		if not os.path.exists(file_path):
+			messagebox.showerror("Error", f"Model file not found at: {file_path}")
+			return
+
 		try:
 			if file_path.endswith('.pkl'):
 				self.model = joblib.load(file_path)
@@ -150,21 +177,52 @@ class DigitRecognitionApp:
 				else:
 					raise AttributeError("Unsupported scikit-learn model type: Cannot determine expected features.")
 				self.h5_input_shape = None
+				messagebox.showinfo("Success", f"Model {selected_model} (.pkl) loaded successfully!")
+
 			elif file_path.endswith('.h5'):
 				custom_objects = {'Patches': Patches, 'PatchEncoder': PatchEncoder}
-				self.model = keras.models.load_model(file_path, custom_objects=custom_objects)
-				self.model_type = 'h5'
-				self.expected_features = None
-				self.h5_input_shape = self.model.input_shape
-			messagebox.showinfo("Success", f"Model {selected_model} loaded successfully!")
+				try:
+					self.model = keras.models.load_model(file_path, custom_objects=custom_objects, compile=False)
+					self.model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+					self.model_type = 'h5'
+					self.expected_features = None
+					self.h5_input_shape = self.model.input_shape
+					messagebox.showinfo("Success", f"Model {selected_model} (.h5) loaded successfully!")
+				except Exception as e:
+					error_details = traceback.format_exc()
+					messagebox.showerror("Error",
+										 f"Failed to load .h5 model {selected_model}: {str(e)}\nDetails: {error_details}")
+					self.model = None
+					self.model_type = None
+					self.h5_input_shape = None
+					self.check_predict_button_state()
+					return
 			self.check_predict_button_state()
 		except Exception as e:
-			messagebox.showerror("Error", f"Failed to load model {selected_model}: {str(e)}")
+			error_details = traceback.format_exc()
+			messagebox.showerror("Error", f"Failed to load model {selected_model}: {str(e)}\nDetails: {error_details}")
 			self.model = None
 			self.model_type = None
 			self.expected_features = None
 			self.h5_input_shape = None
 			self.check_predict_button_state()
+
+	def center_image(self, img):
+		"""Center the digit in the image based on its center of mass."""
+
+		moments = cv2.moments(img)
+		if moments['m00'] == 0:
+			return img
+		cx = int(moments['m10'] / moments['m00'])
+		cy = int(moments['m01'] / moments['m00'])
+
+		rows, cols = img.shape
+		shift_x = cols // 2 - cx
+		shift_y = rows // 2 - cy
+
+		M = np.float32([[1, 0, shift_x], [0, 1, shift_y]])
+		centered_img = cv2.warpAffine(img, M, (cols, rows), borderValue=0)
+		return centered_img
 
 	def preprocess_image(self):
 		if not self.image_path:
@@ -172,12 +230,29 @@ class DigitRecognitionApp:
 			return None
 
 		img = cv2.imread(self.image_path, cv2.IMREAD_GRAYSCALE)
+		if img is None:
+			messagebox.showerror("Error", "Failed to load image!")
+			return None
+
+		img = cv2.GaussianBlur(img, (3, 3), 0)
+
+		img = cv2.resize(img, (28, 28), interpolation=cv2.INTER_AREA)
+
+		img_bin = cv2.adaptiveThreshold(img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
+
+		img_bin = self.center_image(img_bin)
+
+		img = img_bin.astype('float32') / 255.0
+
+		if self.invert_image.get():
+			img = 1.0 - img
 
 		if self.model_type == 'pkl':
 			if self.expected_features == 784:
-				img = cv2.resize(img, (28, 28), interpolation=cv2.INTER_AREA)
+				img = img.reshape(1, -1)
 			elif self.expected_features == 64:
 				img = cv2.resize(img, (8, 8), interpolation=cv2.INTER_AREA)
+				img = img.reshape(1, -1)
 			else:
 				messagebox.showerror("Error", f"Unsupported number of features: {self.expected_features}")
 				return None
@@ -190,30 +265,26 @@ class DigitRecognitionApp:
 			if len(expected_shape) == 1:
 				features = expected_shape[0]
 				if features == 784:
-					img = cv2.resize(img, (28, 28), interpolation=cv2.INTER_AREA)
 					img = img.reshape(1, -1)
 				else:
 					messagebox.showerror("Error", f"Unsupported number of features for .h5 model: {features}")
 					return None
 			elif len(expected_shape) == 2:
 				height, width = expected_shape
-				img = cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA)
+				if height != 28 or width != 28:
+					messagebox.showerror("Error", f"Unsupported input shape for .h5 model: {expected_shape}")
+					return None
 				img = img.reshape(1, height, width)
 			elif len(expected_shape) == 3:
 				height, width, channels = expected_shape
-				if channels != 1:
-					messagebox.showerror("Error", f"Unsupported number of channels: {channels}. Expected 1.")
+				if height != 28 or width != 28 or channels != 1:
+					messagebox.showerror("Error", f"Unsupported input shape for .h5 model: {expected_shape}")
 					return None
-				img = cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA)
 				img = img.reshape(1, height, width, channels)
 			else:
 				messagebox.showerror("Error", f"Unsupported input shape for .h5 model: {self.h5_input_shape}")
 				return None
 
-		img = img.astype('float32') / 255.0
-
-		if self.model_type == 'pkl':
-			img = img.reshape(1, -1)
 		return img
 
 	def predict_digit(self):
