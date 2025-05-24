@@ -2,7 +2,7 @@ import os
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 from PIL import Image, ImageTk
 import numpy as np
 import cv2
@@ -66,11 +66,22 @@ class DigitRecognitionApp:
 		self.root.geometry("600x400")
 
 		self.image_path = None
-		self.model_path = None
 		self.model = None
 		self.model_type = None
 		self.expected_features = None
 		self.h5_input_shape = None
+
+		self.model_names = [
+			'KNeighbors_EMNIST_digits', 'LogisticRegression_EMNIST_digits',
+			'GaussianNB_EMNIST_digits', 'DecisionTree_EMNIST_digits',
+			'DNN_EMNIST_digits', 'SVM_model', 'LogisticRegression_model',
+			'KNeighbors_model', 'GaussianNB_model', 'DecisionTree_model',
+			'vit_mnist_model', 'KNeighbors_MNIST_model', 'dnn_mnist_model',
+			'LogisticRegression_MNIST_model', 'GaussianNB_MNIST_model',
+			'DecisionTree_MNIST_model'
+		]
+		self.model_paths = {name: f"{name}.pkl" if name.endswith(
+			'_model') or 'EMNIST' in name else f"{name}.h5" for name in self.model_names}
 
 		self.label_title = tk.Label(root, text="Handwritten Digit Recognition", font=("Arial", 16))
 		self.label_title.pack(pady=10)
@@ -78,10 +89,15 @@ class DigitRecognitionApp:
 		self.btn_load_image = tk.Button(root, text="Load Image", command=self.load_image)
 		self.btn_load_image.pack(pady=5)
 
-		self.btn_load_model = tk.Button(root, text="Load Model", command=self.load_model)
-		self.btn_load_model.pack(pady=5)
+		self.label_model = tk.Label(root, text="Select Model:", font=("Arial", 12))
+		self.label_model.pack(pady=5)
 
-		self.btn_predict = tk.Button(root, text="Predict Digit", command=self.predict_digit)
+		self.model_var = tk.StringVar()
+		self.model_dropdown = ttk.Combobox(root, textvariable=self.model_var, values=self.model_names, state="readonly")
+		self.model_dropdown.bind("<<ComboboxSelected>>", self.load_selected_model)
+		self.model_dropdown.pack(pady=5)
+
+		self.btn_predict = tk.Button(root, text="Predict Digit", command=self.predict_digit, state="disabled")
 		self.btn_predict.pack(pady=5)
 
 		self.label_image = tk.Label(root)
@@ -90,53 +106,65 @@ class DigitRecognitionApp:
 		self.label_result = tk.Label(root, text="Prediction: None", font=("Arial", 12))
 		self.label_result.pack(pady=10)
 
+	def check_predict_button_state(self):
+		"""Enable predict button only if both image and model are selected."""
+		if self.image_path and self.model:
+			self.btn_predict.config(state="normal")
+		else:
+			self.btn_predict.config(state="disabled")
+
 	def load_image(self):
 		"""Load and display an image file."""
 		file_path = filedialog.askopenfilename(filetypes=[("Image files", "*.png *.jpg *.jpeg *.bmp")])
 		if file_path:
 			self.image_path = file_path
-
 			img = Image.open(file_path)
 			img = img.resize((100, 100))
 			img_tk = ImageTk.PhotoImage(img)
 			self.label_image.config(image=img_tk)
 			self.label_image.image = img_tk
 			self.label_result.config(text="Prediction: None")
+			self.check_predict_button_state()
 
-	def load_model(self):
-		"""Load a .pkl or .h5 model file."""
-		file_path = filedialog.askopenfilename(filetypes=[("Model files", "*.pkl *.h5")])
-		if file_path:
-			self.model_path = file_path
-			try:
-				if file_path.endswith('.pkl'):
-					self.model = joblib.load(file_path)
-					self.model_type = 'pkl'
+	def load_selected_model(self, event=None):
+		"""Load the selected model from the dropdown."""
+		selected_model = self.model_var.get()
+		if not selected_model:
+			return
 
-					if hasattr(self.model, 'coef_'):
-						self.expected_features = self.model.coef_.shape[1]
-					elif hasattr(self.model, 'theta_'):
-						self.expected_features = self.model.theta_.shape[1]
-					elif hasattr(self.model, 'n_features_in_'):
-						self.expected_features = self.model.n_features_in_
-					else:
-						raise AttributeError("Unsupported scikit-learn model type: Cannot determine expected features.")
-					self.h5_input_shape = None
-				elif file_path.endswith('.h5'):
+		file_path = self.model_paths.get(selected_model)
+		if not file_path:
+			messagebox.showerror("Error", f"Model path for {selected_model} not found!")
+			return
 
-					custom_objects = {'Patches': Patches, 'PatchEncoder': PatchEncoder}
-					self.model = keras.models.load_model(file_path, custom_objects=custom_objects)
-					self.model_type = 'h5'
-					self.expected_features = None
-
-					self.h5_input_shape = self.model.input_shape
-				messagebox.showinfo("Success", "Model loaded successfully!")
-			except Exception as e:
-				messagebox.showerror("Error", f"Failed to load model: {str(e)}")
-				self.model = None
-				self.model_type = None
-				self.expected_features = None
+		try:
+			if file_path.endswith('.pkl'):
+				self.model = joblib.load(file_path)
+				self.model_type = 'pkl'
+				if hasattr(self.model, 'coef_'):
+					self.expected_features = self.model.coef_.shape[1]
+				elif hasattr(self.model, 'theta_'):
+					self.expected_features = self.model.theta_.shape[1]
+				elif hasattr(self.model, 'n_features_in_'):
+					self.expected_features = self.model.n_features_in_
+				else:
+					raise AttributeError("Unsupported scikit-learn model type: Cannot determine expected features.")
 				self.h5_input_shape = None
+			elif file_path.endswith('.h5'):
+				custom_objects = {'Patches': Patches, 'PatchEncoder': PatchEncoder}
+				self.model = keras.models.load_model(file_path, custom_objects=custom_objects)
+				self.model_type = 'h5'
+				self.expected_features = None
+				self.h5_input_shape = self.model.input_shape
+			messagebox.showinfo("Success", f"Model {selected_model} loaded successfully!")
+			self.check_predict_button_state()
+		except Exception as e:
+			messagebox.showerror("Error", f"Failed to load model {selected_model}: {str(e)}")
+			self.model = None
+			self.model_type = None
+			self.expected_features = None
+			self.h5_input_shape = None
+			self.check_predict_button_state()
 
 	def preprocess_image(self):
 		if not self.image_path:
@@ -147,10 +175,8 @@ class DigitRecognitionApp:
 
 		if self.model_type == 'pkl':
 			if self.expected_features == 784:
-
 				img = cv2.resize(img, (28, 28), interpolation=cv2.INTER_AREA)
 			elif self.expected_features == 64:
-
 				img = cv2.resize(img, (8, 8), interpolation=cv2.INTER_AREA)
 			else:
 				messagebox.showerror("Error", f"Unsupported number of features: {self.expected_features}")
@@ -164,7 +190,6 @@ class DigitRecognitionApp:
 			if len(expected_shape) == 1:
 				features = expected_shape[0]
 				if features == 784:
-
 					img = cv2.resize(img, (28, 28), interpolation=cv2.INTER_AREA)
 					img = img.reshape(1, -1)
 				else:
@@ -192,11 +217,7 @@ class DigitRecognitionApp:
 		return img
 
 	def predict_digit(self):
-		if not self.model:
-			messagebox.showerror("Error", "Please load a model first!")
-			return
-		if not self.image_path:
-			messagebox.showerror("Error", "Please load an image first!")
+		if not self.model or not self.image_path:
 			return
 		img = self.preprocess_image()
 		if img is not None:
